@@ -1,0 +1,18 @@
+gcloud dataproc clusters create my-etl-cluster \
+    --region=us-east1 \
+    --zone=us-east1-b \
+    --master-machine-type=e2-standard-2 \
+    --master-boot-disk-size=50GB \
+    --worker-machine-type=e2-standard-2 \
+    --worker-boot-disk-size=50GB \
+    --num-workers=2 \
+    --image-version=2.1-debian11 \
+    --properties=spark:spark.sql.legacy.timeParserPolicy=LEGACY \
+    --enable-component-gateway
+
+
+
+gcloud dataproc jobs submit pyspark \
+    gs://tet-raw-data/scripts/etl_weather_locations.py \
+    --cluster=my-etl-cluster \
+    --region=us-east1
