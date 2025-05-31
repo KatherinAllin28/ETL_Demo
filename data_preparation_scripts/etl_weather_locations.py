@@ -8,17 +8,16 @@ from pyspark.sql.types import (
     ArrayType,
     DateType,
     IntegerType,
-)  # Import necessary types
+)
 
 # Initialize Spark Session
 spark = SparkSession.builder.appName("WeatherLocationsETL").getOrCreate()
 
 # --- Configuration (Update with your actual bucket names) ---
-RAW_DATA_BUCKET = "gs://tet-raw-data"
-TRUSTED_DATA_BUCKET = "gs://tet-trusted-data"
+RAW_DATA_BUCKET = "gs://tet-raw-data"  # Ensure this is correct as per your logs
+TRUSTED_DATA_BUCKET = "gs://tet-trusted-data"  # Ensure this is correct as per your logs
 
 # Input paths for raw data in GCS
-# Adjust WEATHER_INPUT_PATH if your blob name pattern is different (e.g., just "*.json")
 WEATHER_INPUT_PATH = f"{RAW_DATA_BUCKET}/weather_data/2022/*.json"
 LOCATIONS_INPUT_PATH = f"{RAW_DATA_BUCKET}/sql_data/locations/*.csv"
 
@@ -26,7 +25,6 @@ LOCATIONS_INPUT_PATH = f"{RAW_DATA_BUCKET}/sql_data/locations/*.csv"
 PROCESSED_OUTPUT_PATH = f"{TRUSTED_DATA_BUCKET}/processed_weather_locations_data/"
 
 # --- Explicit Schema for Weather Data ---
-# This schema matches the structure of the Open-Meteo API response for daily data
 weather_schema = StructType(
     [
         StructField("latitude", DoubleType(), True),
@@ -67,21 +65,24 @@ def run_etl():
 
     # --- 1. Read Raw Data ---
     print(f"Reading weather data from: {WEATHER_INPUT_PATH}")
-    # Read weather data with explicit schema
-    weather_df = spark.read.schema(weather_schema).json(WEATHER_INPUT_PATH)
-    # weather_df.printSchema() # Uncomment to see the schema for debugging
+    # *** IMPORTANT CHANGE HERE ***
+    weather_df = (
+        spark.read.schema(weather_schema)
+        .option("multiline", "true")
+        .json(WEATHER_INPUT_PATH)
+    )
+    # **************************
+    print(f"DEBUG: weather_df count: {weather_df.count()}")
+    weather_df.printSchema()  # Keep printSchema to verify
+    weather_df.show(5)  # Show first 5 rows of weather_df
 
     print(f"Reading locations data from: {LOCATIONS_INPUT_PATH}")
-    # Read locations data (CSV format from Cloud SQL extraction)
     locations_df = spark.read.csv(LOCATIONS_INPUT_PATH, header=True, inferSchema=True)
-    # locations_df.printSchema() # Uncomment to see the schema for debugging
+    print(f"DEBUG: locations_df count: {locations_df.count()}")
+    locations_df.show(5)  # Show first 5 rows of locations_df
 
     # --- 2. Prepare Weather Data ---
     print("Preparing weather data...")
-    # Open-Meteo's JSON has 'daily' as a struct containing arrays.
-    # We need to flatten it so each row represents one day's weather data.
-    # The 'arrays_zip' function pairs elements from corresponding arrays.
-    # 'explode' then creates a new row for each element in the zipped array.
     weather_exploded_df = (
         weather_df.select(
             col("latitude"),
@@ -101,43 +102,37 @@ def run_etl():
             col("daily_record.temperature_2m_max").alias("max_temp_c"),
             col("daily_record.precipitation_sum").alias("precipitation_mm"),
         )
-        .withColumn(
-            "weather_date",
-            to_date(
-                col("weather_date_str"), "yyyy-MM-dd"
-            ),  # Convert date string to Date type
-        )
+        .withColumn("weather_date", to_date(col("weather_date_str"), "yyyy-MM-dd"))
     )
+    print(f"DEBUG: weather_exploded_df count: {weather_exploded_df.count()}")
+    weather_exploded_df.show(5)  # Show first 5 rows of weather_exploded_df
 
     # --- 3. Prepare Locations Data ---
     print("Preparing locations data...")
-    # Select relevant columns and potentially rename them for clarity or to avoid conflicts during join.
     locations_prepared_df = locations_df.select(
         col("location_id"),
         col("city_name"),
         col("country"),
-        col("latitude").alias(
-            "location_latitude"
-        ),  # Rename to differentiate from weather_df's latitude
-        col("longitude").alias(
-            "location_longitude"
-        ),  # Rename to differentiate from weather_df's longitude
+        col("latitude").alias("location_latitude"),
+        col("longitude").alias("location_longitude"),
         col("population"),
         col("elevation"),
-        # Add any other columns you want from your locations table
     )
+    print(f"DEBUG: locations_prepared_df count: {locations_prepared_df.count()}")
+    locations_prepared_df.show(5)  # Show first 5 rows of locations_prepared_df
 
     # --- 4. Join DataFrames ---
     print("Joining weather and locations data...")
-    # Join on latitude and longitude to link weather data to specific locations.
     joined_df = weather_exploded_df.join(
         locations_prepared_df,
         (weather_exploded_df.latitude == locations_prepared_df.location_latitude)
         & (weather_exploded_df.longitude == locations_prepared_df.location_longitude),
-        "inner",  # Use "inner" join to get only matching records
+        "inner",
     )
+    print(f"DEBUG: joined_df count: {joined_df.count()}")  # THIS IS THE CRUCIAL LINE
+    joined_df.show(5)  # Show first 5 rows of joined_df if any
 
-    # Select and reorder final columns for the trusted dataset
+    # --- 5. Select and Write Processed Data to Trusted Zone ---
     final_trusted_df = joined_df.select(
         col("weather_date"),
         col("location_id"),
@@ -147,10 +142,8 @@ def run_etl():
         col("precipitation_mm"),
         col("population"),
         col("elevation"),
-        # Include any other columns you need in your final trusted dataset
-    ).orderBy("weather_date", "city_name")  # Optional: order for consistency
+    ).orderBy("weather_date", "city_name")
 
-    # --- 5. Write Processed Data to Trusted Zone ---
     print(f"Writing processed data to: {PROCESSED_OUTPUT_PATH}")
     final_trusted_df.write.mode("overwrite").parquet(PROCESSED_OUTPUT_PATH)
 
