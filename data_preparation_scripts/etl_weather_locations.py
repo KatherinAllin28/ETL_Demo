@@ -1,5 +1,5 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, to_date, explode, arrays_zip, lit
+from pyspark.sql.functions import col, to_date, explode, arrays_zip, udf
 from pyspark.sql.types import (
     StructType,
     StructField,
@@ -9,16 +9,21 @@ from pyspark.sql.types import (
     DateType,
     IntegerType,
 )
+import numpy as np
 
 # Initialize Spark Session
 spark = SparkSession.builder.appName("WeatherLocationsETL").getOrCreate()
 
 # --- Configuration (Update with your actual bucket names) ---
-RAW_DATA_BUCKET = "gs://tet-raw-data"  # Ensure this is correct as per your logs
-TRUSTED_DATA_BUCKET = "gs://tet-trusted-data"  # Ensure this is correct as per your logs
+RAW_DATA_BUCKET = "gs://tet-raw-data"
+TRUSTED_DATA_BUCKET = "gs://tet-trusted-data"
 
 # Input paths for raw data in GCS
-WEATHER_INPUT_PATH = f"{RAW_DATA_BUCKET}/weather_data/2022/*.json"
+# Original path: WEATHER_INPUT_PATH = f"{RAW_DATA_BUCKET}/weather_data/2022/*.json"
+# For debugging: Use a specific known good file and a different variable name
+WEATHER_INPUT_PATH_DEBUG = (
+    f"{RAW_DATA_BUCKET}/weather_data/2022/*.json"  # <--- DEBUGGING CHANGE HERE
+)
 LOCATIONS_INPUT_PATH = f"{RAW_DATA_BUCKET}/sql_data/locations/*.csv"
 
 # Output path for processed data in GCS (Trusted Zone)
@@ -60,33 +65,45 @@ weather_schema = StructType(
 )
 
 
-def run_etl():
-    print(f"Starting ETL job...")
+# --- Define UDF for rounding to nearest 0.125 ---
+def round_to_nearest_0125_py(coord):
+    if coord is None:
+        return None
+    return float(np.round(coord / 0.125) * 0.125)
 
-    # --- 1. Read Raw Data ---
-    print(f"Reading weather data from: {WEATHER_INPUT_PATH}")
-    # *** IMPORTANT CHANGE HERE ***
+
+# Register the UDF
+round_to_nearest_0125_udf = udf(round_to_nearest_0125_py, DoubleType())
+
+
+# --- ETL Logic ---
+def run_etl():
+    # --- 1. Read Raw Data from GCS ---
+    print(f"Reading weather data from: {WEATHER_INPUT_PATH_DEBUG}")
+    # Use the explicit schema and multiLine option to read weather data
     weather_df = (
         spark.read.schema(weather_schema)
-        .option("multiline", "true")
-        .json(WEATHER_INPUT_PATH)
-    )
-    # **************************
+        .option("multiLine", True)
+        .json(WEATHER_INPUT_PATH_DEBUG)
+    )  # <--- DEBUGGING CHANGE HERE
     print(f"DEBUG: weather_df count: {weather_df.count()}")
-    weather_df.printSchema()  # Keep printSchema to verify
-    weather_df.show(5)  # Show first 5 rows of weather_df
+    weather_df.printSchema()
+    weather_df.show(5, truncate=False)
 
+    # Read locations data (no change here)
     print(f"Reading locations data from: {LOCATIONS_INPUT_PATH}")
-    locations_df = spark.read.csv(LOCATIONS_INPUT_PATH, header=True, inferSchema=True)
+    locations_df = spark.read.option("header", "true").csv(LOCATIONS_INPUT_PATH)
     print(f"DEBUG: locations_df count: {locations_df.count()}")
-    locations_df.show(5)  # Show first 5 rows of locations_df
+    locations_df.printSchema()
+    locations_df.show(5, truncate=False)
 
     # --- 2. Prepare Weather Data ---
     print("Preparing weather data...")
+    # This section remains the same, but it depends on weather_df having data
     weather_exploded_df = (
         weather_df.select(
-            col("latitude"),
-            col("longitude"),
+            round_to_nearest_0125_udf(col("latitude")).alias("latitude"),
+            round_to_nearest_0125_udf(col("longitude")).alias("longitude"),
             explode(
                 arrays_zip(
                     col("daily.time"),
@@ -102,37 +119,49 @@ def run_etl():
             col("daily_record.temperature_2m_max").alias("max_temp_c"),
             col("daily_record.precipitation_sum").alias("precipitation_mm"),
         )
-        .withColumn("weather_date", to_date(col("weather_date_str"), "yyyy-MM-dd"))
+        .withColumn("weather_date", to_date(col("weather_date_str")))
     )
+
     print(f"DEBUG: weather_exploded_df count: {weather_exploded_df.count()}")
-    weather_exploded_df.show(5)  # Show first 5 rows of weather_exploded_df
+    weather_exploded_df.printSchema()
+    weather_exploded_df.show(5, truncate=False)
 
     # --- 3. Prepare Locations Data ---
     print("Preparing locations data...")
+    # This section remains the same
     locations_prepared_df = locations_df.select(
-        col("location_id"),
+        col("location_id").cast("integer"),
         col("city_name"),
         col("country"),
-        col("latitude").alias("location_latitude"),
-        col("longitude").alias("location_longitude"),
-        col("population"),
-        col("elevation"),
+        round_to_nearest_0125_udf(col("latitude").cast("double")).alias(
+            "location_latitude"
+        ),
+        round_to_nearest_0125_udf(col("longitude").cast("double")).alias(
+            "location_longitude"
+        ),
+        col("population").cast("integer"),
+        col("elevation").cast("double"),
     )
     print(f"DEBUG: locations_prepared_df count: {locations_prepared_df.count()}")
-    locations_prepared_df.show(5)  # Show first 5 rows of locations_prepared_df
+    locations_prepared_df.printSchema()
+    locations_prepared_df.show(5, truncate=False)
 
     # --- 4. Join DataFrames ---
     print("Joining weather and locations data...")
+    # This section remains the same
     joined_df = weather_exploded_df.join(
         locations_prepared_df,
         (weather_exploded_df.latitude == locations_prepared_df.location_latitude)
         & (weather_exploded_df.longitude == locations_prepared_df.location_longitude),
         "inner",
     )
-    print(f"DEBUG: joined_df count: {joined_df.count()}")  # THIS IS THE CRUCIAL LINE
-    joined_df.show(5)  # Show first 5 rows of joined_df if any
+    print(f"DEBUG: joined_df count: {joined_df.count()}")
+    joined_df.printSchema()
+    joined_df.show(5, truncate=False)
 
     # --- 5. Select and Write Processed Data to Trusted Zone ---
+    print(f"Writing processed data to: {PROCESSED_OUTPUT_PATH}")
+    # This section remains the same
     final_trusted_df = joined_df.select(
         col("weather_date"),
         col("location_id"),
@@ -144,9 +173,7 @@ def run_etl():
         col("elevation"),
     ).orderBy("weather_date", "city_name")
 
-    print(f"Writing processed data to: {PROCESSED_OUTPUT_PATH}")
     final_trusted_df.write.mode("overwrite").parquet(PROCESSED_OUTPUT_PATH)
-
     print("ETL job completed successfully!")
 
     spark.stop()
