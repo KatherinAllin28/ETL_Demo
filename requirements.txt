@@ -1,0 +1,19 @@
+# Spark and dependencies
+pyspark==3.4.0
+py4j==0.10.9.7
+
+# Google Cloud dependencies
+google-cloud-storage==2.10.0
+google-auth==2.23.3
+google-auth-oauthlib==1.1.0
+google-auth-httplib2==0.1.1
+
+# Data processing
+pandas
+numpy==1.24.3
+pyarrow==13.0.0
+
+# Optional: For local development and testing
+jupyter==1.0.0
+matplotlib==3.7.2
+seaborn==0.12.2
