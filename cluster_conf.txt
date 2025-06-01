@@ -1,0 +1,177 @@
+# ================================================================================
+#                    CREACION DE CLUSTER DATAPROC PARA ETL
+# ================================================================================
+
+# --------------------------------------------------------------------------------
+# 1. CONFIGURACION DE PERMISOS IAM
+# --------------------------------------------------------------------------------
+
+# Roles necesarios:
+# - Storage Admin
+# - Storage Object Admin  
+# - Dataproc Editor
+# - Composer Worker
+
+PROJECT_ID=$(gcloud config get-value project)
+
+# Asignar permisos a la cuenta de servicio de Compute Engine
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+    --member="serviceAccount:804908140240-compute@developer.gserviceaccount.com" \
+    --role="roles/composer.worker"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+    --member="serviceAccount:804908140240-compute@developer.gserviceaccount.com" \
+    --role="roles/dataproc.editor"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+    --member="serviceAccount:804908140240-compute@developer.gserviceaccount.com" \
+    --role="roles/storage.admin"
+
+# Asignar permisos para el agente de servicio de Composer
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+    --member="serviceAccount:service-804908140240@cloudcomposer-accounts.iam.gserviceaccount.com" \
+    --role="roles/composer.ServiceAgentV2Ext"
+
+# --------------------------------------------------------------------------------
+# 2. CREACION DEL CLUSTER DATAPROC
+# --------------------------------------------------------------------------------
+
+gcloud dataproc clusters create my-etl-cluster \
+    --region=us-east1 \
+    --zone=us-east1-b \
+    --num-workers=2 \
+    --master-machine-type=e2-standard-2 \
+    --worker-machine-type=e2-standard-2 \
+    --master-boot-disk-size=50GB \
+    --worker-boot-disk-size=50GB \
+    --image-version=2.2-debian11 \
+    --enable-component-gateway \
+    --optional-components=JUPYTER \
+    --project=tet-p3-2025
+
+# OPCIONAL: Auto-eliminacion por inactividad (descomentar si se desea)
+# --max-idle=10m
+
+# --------------------------------------------------------------------------------
+# 3. CONFIGURACION DE NAT GATEWAY (CONECTIVIDAD EXTERNA)
+# --------------------------------------------------------------------------------
+
+# Crear router para NAT
+gcloud compute routers create dataproc-router \
+    --network=default \
+    --region=us-east1 \
+    --project=tet-p3-2025
+
+# Crear NAT Gateway
+gcloud compute routers nats create dataproc-nat \
+    --router=dataproc-router \
+    --region=us-east1 \
+    --nat-all-subnet-ip-ranges \
+    --auto-allocate-nat-external-ips \
+    --project=tet-p3-2025
+
+# ================================================================================
+#                        AUTOMATIZACION CON VM PROGRAMADA
+# ================================================================================
+
+# --------------------------------------------------------------------------------
+# 4. CREAR VM PARA EJECUTAR JOBS AUTOMATICAMENTE
+# --------------------------------------------------------------------------------
+
+gcloud compute instances create dataproc-trigger-vm \
+    --zone=us-east1-b \
+    --machine-type=e2-micro \
+    --image-family=ubuntu-2204-lts \
+    --image-project=ubuntu-os-cloud \
+    --boot-disk-size=50GB \
+    --tags=http-server \
+    --project=tet-p3-2025 \
+    --metadata=startup-script='#!/bin/bash
+        sudo apt update
+        sudo apt install -y google-cloud-sdk python3-pip
+        pip3 install google-cloud-dataproc google-cloud-storage'
+
+# Conectarse a la VM
+gcloud compute ssh dataproc-trigger-vm --zone=us-east1-b --project=tet-p3-2025
+
+# --------------------------------------------------------------------------------
+# 5. CONFIGURACION DENTRO DE LA VM
+# --------------------------------------------------------------------------------
+
+# Autenticarse (en produccion usar cuenta de servicio)
+gcloud auth login
+
+# Configurar proyecto por defecto
+gcloud config set project tet-p3-2025
+
+# Probar ejecucion manual del ETL
+gcloud dataproc jobs submit pyspark gs://etl-scripts-00/analysis.py \
+    --cluster=my-etl-cluster \
+    --region=us-east1 \
+    --project=tet-p3-2025
+
+# --------------------------------------------------------------------------------
+# 6. AUTOMATIZACION CON CRONTAB
+# --------------------------------------------------------------------------------
+
+# Abrir editor de crontab
+crontab -e
+
+# CONTENIDO A AGREGAR EN CRONTAB:
+# -----------------------------------------------
+# Variables de entorno para cron
+PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/snap/bin
+
+# ETL automatico cada 12 horas (00:00 y 12:00)
+0 0,12 * * * gcloud dataproc jobs submit pyspark gs://etl-scripts-00/analysis.py --cluster=my-etl-cluster --region=us-east1 --project=tet-p3-2025 >> /home/ubuntu/dataproc_log.txt 2>&1
+
+# Log de respaldo semanal (domingo a las 02:00)
+0 2 * * 0 gcloud dataproc jobs submit pyspark gs://etl-scripts-00/analysis.py --cluster=my-etl-cluster --region=us-east1 --project=tet-p3-2025 >> /home/ubuntu/dataproc_backup_log.txt 2>&1
+# -----------------------------------------------
+
+# --------------------------------------------------------------------------------
+# 7. MONITOREO Y VERIFICACION
+# --------------------------------------------------------------------------------
+
+# Ver tareas programadas
+crontab -l
+
+# Verificar logs de ejecucion
+tail -f /home/ubuntu/dataproc_log.txt
+
+# Ver ultimas 10 ejecuciones del dia
+grep "$(date +%Y-%m-%d)" /home/ubuntu/dataproc_log.txt | tail -10
+
+# Verificar estado del cluster
+gcloud dataproc clusters list --region=us-east1 --project=tet-p3-2025
+
+# Ver detalles especificos del cluster
+gcloud dataproc clusters describe my-etl-cluster --region=us-east1 --project=tet-p3-2025
+
+# Listar jobs ejecutados
+gcloud dataproc jobs list --region=us-east1 --project=tet-p3-2025
+
+# --------------------------------------------------------------------------------
+# 8. COMANDOS DE LIMPIEZA (OPCIONAL)
+# --------------------------------------------------------------------------------
+
+# Eliminar cluster cuando no se necesite
+gcloud dataproc clusters delete my-etl-cluster --region=us-east1 --project=tet-p3-2025
+
+# Eliminar VM de automatizacion
+gcloud compute instances delete dataproc-trigger-vm --zone=us-east1-b --project=tet-p3-2025
+
+# Eliminar NAT Gateway
+gcloud compute routers nats delete dataproc-nat --router=dataproc-router --region=us-east1 --project=tet-p3-2025
+
+# Eliminar router
+gcloud compute routers delete dataproc-router --region=us-east1 --project=tet-p3-2025
+
+# ================================================================================
+#                                   NOTAS
+# ================================================================================
+# 
+# - El cluster se ejecuta en us-east1-b con 2 workers + 1 master
+# - La VM trigger ejecuta el ETL cada 12 horas automaticamente
+# - Los logs se guardan en /home/ubuntu/dataproc_log.txt
+# - Para produccion, usar cuentas de servicio en lugar de auth login

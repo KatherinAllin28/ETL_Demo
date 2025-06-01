@@ -1,0 +1,28 @@
+swagger: '2.0'
+info:
+  title: TET Weather Data API
+  version: '1.0.0'
+host: 'tet-weather-api-gateway-a9rpivv4.ue.gateway.dev'
+schemes: [https]
+produces: [application/json]
+
+paths:
+  /data:
+    get:
+      operationId: get_data
+      parameters:
+        - {name: dataset, in: query, required: true, type: string}
+        - {name: format, in: query, required: false, type: string, default: json}
+        - {name: limit, in: query, required: false, type: integer, default: 100}
+      responses: {200: {description: OK}}
+      x-google-backend:
+        address: https://get-data-7dbkmmrkha-ue.a.run.app
+      security: []
+
+  /datasets:
+    get:
+      operationId: list_datasets
+      responses: {200: {description: OK}}
+      x-google-backend:
+        address: https://list-datasets-7dbkmmrkha-ue.a.run.app
+      security: []

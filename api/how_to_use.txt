@@ -1,0 +1,325 @@
+# ================================================================================
+#                         TET WEATHER DATA API - GUIA DE USO
+# ================================================================================
+#
+# API REST para acceder a datos de análisis climático procesados
+# Base URL: https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev
+#
+# ================================================================================
+
+# --------------------------------------------------------------------------------
+# 1. INFORMACION GENERAL
+# --------------------------------------------------------------------------------
+
+# URL Base: https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev
+# Metodos:  GET
+# Formato:  JSON, CSV
+# Auth:     No requerida (API publica)
+
+# Endpoints disponibles:
+# - GET /datasets     : Lista todos los datasets disponibles
+# - GET /data         : Obtiene datos de un dataset especifico
+
+# --------------------------------------------------------------------------------
+# 2. LISTAR DATASETS DISPONIBLES
+# --------------------------------------------------------------------------------
+
+# Obtener lista completa de datasets
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/datasets'
+
+# Respuesta esperada:
+# {
+#   "available_datasets": [
+#     {
+#       "name": "correlations",
+#       "category": "descriptive_analytics",
+#       "file_count": 3,
+#       "endpoint": "/data?dataset=correlations"
+#     },
+#     ...
+#   ],
+#   "total_datasets": 11,
+#   "categories": {
+#     "descriptive_analytics": [...],
+#     "ml_analytics": [...]
+#   }
+# }
+
+# --------------------------------------------------------------------------------
+# 3. OBTENER DATOS DE UN DATASET
+# --------------------------------------------------------------------------------
+
+# Parametros disponibles:
+# - dataset (requerido): Nombre del dataset
+# - format (opcional):   json, csv (default: json)
+# - limit (opcional):    Numero de registros (default: 100)
+
+# ............................................................................
+# 3.1 ANALISIS DESCRIPTIVO
+# ............................................................................
+
+# Correlaciones entre variables climaticas
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=correlations&limit=5'
+
+# Analisis mensual de temperaturas y precipitaciones
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=monthly_analysis&limit=10'
+
+# Analisis estacional por ciudad
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=seasonal_analysis'
+
+# Comparacion entre ciudades
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=cities_comparison&limit=3'
+
+# Ciudades con temperaturas extremas
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=extreme_cities'
+
+# Patrones de precipitacion
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=precipitation_patterns'
+
+# Analisis de zonas tropicales
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=tropical_analysis'
+
+# ............................................................................
+# 3.2 ANALISIS DE MACHINE LEARNING
+# ............................................................................
+
+# Resultados de clustering de ciudades
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=clustering_results&limit=5'
+
+# Modelos de regresion para prediccion climatica
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=regression_results&limit=3'
+
+# Deteccion de anomalias climaticas
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=anomalies&limit=5'
+
+# Patrones temporales identificados por ML
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=temporal_patterns'
+
+# --------------------------------------------------------------------------------
+# 4. FORMATOS DE DESCARGA
+# --------------------------------------------------------------------------------
+
+# ............................................................................
+# 4.1 FORMATO JSON (default)
+# ............................................................................
+
+# JSON con estructura completa
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=correlations&format=json&limit=2'
+
+# Respuesta JSON:
+# {
+#   "dataset": "correlations",
+#   "found_path": "descriptive_analytics_results/correlations/",
+#   "records_count": 2,
+#   "columns": ["city_name", "country", "temp_precipitation_corr", ...],
+#   "data": [
+#     {
+#       "city_name": "Bogota",
+#       "country": "Colombia",
+#       "temp_precipitation_corr": -0.138,
+#       ...
+#     }
+#   ]
+# }
+
+# ............................................................................
+# 4.2 FORMATO CSV
+# ............................................................................
+
+# Descargar como CSV
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=monthly_analysis&format=csv&limit=10' -o monthly_data.csv
+
+# Ver CSV en terminal
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=correlations&format=csv&limit=3'
+
+# --------------------------------------------------------------------------------
+# 5. EJEMPLOS AVANZADOS
+# --------------------------------------------------------------------------------
+
+# ............................................................................
+# 5.1 ANALISIS EXPLORATORIO
+# ............................................................................
+
+# Ver estructura de un dataset
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=correlations&limit=1' | jq '.columns'
+
+# Contar registros totales (usar limit alto)
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=monthly_analysis&limit=1000' | jq '.records_count'
+
+# Ver primeros registros de cada categoria
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=clustering_results&limit=5'
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=seasonal_analysis&limit=5'
+
+# ............................................................................
+# 5.2 DESCARGA MASIVA
+# ............................................................................
+
+# Descargar todos los datasets en CSV
+for dataset in correlations monthly_analysis seasonal_analysis cities_comparison extreme_cities precipitation_patterns tropical_analysis clustering_results regression_results anomalies temporal_patterns; do
+    echo "Descargando $dataset..."
+    curl "https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=$dataset&format=csv" -o "${dataset}_data.csv"
+done
+
+# Crear directorio organizado
+mkdir -p weather_data/{descriptive,ml}
+
+# Descargar datasets descriptivos
+for dataset in correlations monthly_analysis seasonal_analysis cities_comparison extreme_cities precipitation_patterns tropical_analysis; do
+    curl "https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=$dataset&format=csv" -o "weather_data/descriptive/${dataset}.csv"
+done
+
+# Descargar datasets de ML
+for dataset in clustering_results regression_results anomalies temporal_patterns; do
+    curl "https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=$dataset&format=csv" -o "weather_data/ml/${dataset}.csv"
+done
+
+# ............................................................................
+# 5.3 USANDO JQ PARA PROCESAMIENTO JSON
+# ............................................................................
+
+# Extraer solo nombres de ciudades
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=correlations' | jq '.data[].city_name'
+
+# Filtrar ciudades con correlacion alta
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=correlations' | jq '.data[] | select(.temp_precipitation_corr < -0.3)'
+
+# Contar registros por pais
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=correlations' | jq '.data | group_by(.country) | map({country: .[0].country, count: length})'
+
+# ............................................................................
+# 5.4 INTEGRACION CON PYTHON
+# ............................................................................
+
+# Script Python para consumir la API
+cat > weather_api_client.py << 'EOF'
+import requests
+import pandas as pd
+
+BASE_URL = "https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev"
+
+def get_datasets():
+    """Obtener lista de datasets disponibles"""
+    response = requests.get(f"{BASE_URL}/datasets")
+    return response.json()
+
+def get_data(dataset, format="json", limit=100):
+    """Obtener datos de un dataset especifico"""
+    params = {"dataset": dataset, "format": format, "limit": limit}
+    response = requests.get(f"{BASE_URL}/data", params=params)
+    
+    if format == "json":
+        return response.json()
+    else:
+        return response.text
+
+def get_dataframe(dataset, limit=1000):
+    """Obtener datos como DataFrame de pandas"""
+    data = get_data(dataset, limit=limit)
+    return pd.DataFrame(data["data"])
+
+# Ejemplos de uso
+if __name__ == "__main__":
+    # Listar datasets
+    datasets = get_datasets()
+    print(f"Datasets disponibles: {len(datasets['available_datasets'])}")
+    
+    # Obtener correlaciones como DataFrame
+    df_corr = get_dataframe("correlations")
+    print(f"Correlaciones: {df_corr.shape}")
+    print(df_corr.head())
+    
+    # Obtener datos de clustering
+    clustering_data = get_data("clustering_results", limit=10)
+    print(f"Clustering records: {clustering_data['records_count']}")
+EOF
+
+# ............................................................................
+# 5.5 INTEGRACION CON R
+# ............................................................................
+
+# Script R para consumir la API
+cat > weather_api_client.R << 'EOF'
+library(httr)
+library(jsonlite)
+
+BASE_URL <- "https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev"
+
+# Funcion para obtener datasets
+get_datasets <- function() {
+  response <- GET(paste0(BASE_URL, "/datasets"))
+  content(response, "parsed")
+}
+
+# Funcion para obtener datos
+get_data <- function(dataset, limit = 100) {
+  response <- GET(paste0(BASE_URL, "/data"), 
+                  query = list(dataset = dataset, limit = limit))
+  content(response, "parsed")
+}
+
+# Ejemplo de uso
+datasets <- get_datasets()
+cat("Total datasets:", length(datasets$available_datasets), "\n")
+
+# Obtener correlaciones
+corr_data <- get_data("correlations", limit = 50)
+corr_df <- do.call(rbind, lapply(corr_data$data, data.frame))
+print(head(corr_df))
+EOF
+
+# --------------------------------------------------------------------------------
+# 6. MANEJO DE ERRORES
+# --------------------------------------------------------------------------------
+
+# Dataset inexistente
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=inexistente'
+# Respuesta: {"error": "No data found for dataset 'inexistente'", ...}
+
+# Sin parametro dataset
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data'
+# Respuesta: {"error": "Missing 'dataset' parameter", "available_datasets": [...]}
+
+# Limite invalido
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=correlations&limit=abc'
+# Respuesta: {"error": "invalid literal for int() with base 10: 'abc'"}
+
+# --------------------------------------------------------------------------------
+# 7. MEJORES PRACTICAS
+# --------------------------------------------------------------------------------
+
+# 1. Usar limites razonables para evitar timeouts
+#    - Para exploracion: limit=5-10
+#    - Para analisis: limit=100-1000
+#    - Para descarga completa: sin limit o limit alto
+
+# 2. Cachear lista de datasets localmente
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/datasets' > datasets_cache.json
+
+# 3. Usar formato CSV para analisis en herramientas externas
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=monthly_analysis&format=csv' > monthly_analysis.csv
+
+# 4. Verificar estructura antes de descargas masivas
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=correlations&limit=1' | jq '.columns'
+
+# 5. Usar herramientas como jq para procesamiento JSON eficiente
+curl 'https://tet-weather-api-gateway-a9rpivv4.ue.gateway.dev/data?dataset=correlations' | jq '.data[] | {city: .city_name, temp_corr: .temp_precipitation_corr}'
+
+# ================================================================================
+#                                  RESUMEN
+# ================================================================================
+#
+# La TET Weather Data API proporciona acceso facil a datos climaticos procesados
+# incluyendo analisis descriptivos y resultados de machine learning.
+#
+# Datasets principales:
+# - Correlaciones climaticas entre variables
+# - Analisis mensual y estacional
+# - Comparaciones entre ciudades
+# - Clustering y regresion ML
+# - Deteccion de anomalias
+#
+# Formatos: JSON (estructurado) y CSV (para analisis)
+# Sin autenticacion requerida
+# API REST estable y documentada
+#
+# ================================================================================
