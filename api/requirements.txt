@@ -1,0 +1,5 @@
+google-cloud-storage
+flask
+pandas
+pyarrow
+functions-framework
