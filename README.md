@@ -24,6 +24,7 @@ The final outputs are made available through:
 ## 🏗️ Architecture Summary
 
 ### ⏩ Workflow:
+<img src="https://github.com/user-attachments/assets/a758e9e1-9a3f-4802-bb89-f6cbe5231eda" alt="workflow" height=600>
 
 ### ⛅ Data Sources:
 - **Open Meteo API**: Daily and historical weather data.
