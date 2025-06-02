@@ -1,4 +1,5 @@
-import streamlit as st
+import streamlit as st# --- Streamlit UI ---
+st.set_page_config(layout="wide", page_title="Comparador de Clima entre Ciudades")
 import pandas as pd
 from google.cloud import bigquery
 import plotly.express as px
@@ -106,9 +107,6 @@ def fetch_pre_calculated_data_from_api(dataset_name):
         st.error(f"Error al decodificar la respuesta JSON de la API para el dataset '{dataset_name}'.")
         return pd.DataFrame()
 
-
-# --- Streamlit UI ---
-st.set_page_config(layout="wide", page_title="Comparador de Clima entre Ciudades")
 
 st.title("☀ Comparador de Clima entre Ciudades ☀")
 st.markdown("Selecciona dos ciudades y un rango de fechas para comparar sus datos climáticos históricos y explora los análisis calculados.")

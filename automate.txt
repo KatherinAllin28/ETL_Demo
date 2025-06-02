@@ -1,0 +1,352 @@
+# ================================================================================
+#                CONFIGURACION COMPLETA DE PIPELINE ETL AUTOMATIZADO
+# ================================================================================
+
+# --------------------------------------------------------------------------------
+# 1. SUBIR SCRIPTS AL BUCKET ETL-SCRIPTS-00
+# --------------------------------------------------------------------------------
+
+# Desde tu máquina local (donde tienes los scripts)
+# Navegar al directorio del proyecto
+cd /home/jatz/tet/p4/ETL_Demo
+
+# Crear estructura en el bucket
+gsutil mkdir gs://etl-scripts-00/etl-pipeline/
+
+# Subir scripts individuales
+gsutil cp data_extraction_scripts/extract_sql_data.py gs://etl-scripts-00/etl-pipeline/
+gsutil cp data_extraction_scripts/ingest_weather_data.py gs://etl-scripts-00/etl-pipeline/
+gsutil cp data_preparation_scripts/etl_weather_locations.py gs://etl-scripts-00/etl-pipeline/
+gsutil cp data_preparation_scripts/load_to_bigquery.py gs://etl-scripts-00/etl-pipeline/
+
+# Verificar subida
+gsutil ls gs://etl-scripts-00/etl-pipeline/
+
+# --------------------------------------------------------------------------------
+# 2. CREAR SCRIPT MAESTRO DE ORQUESTACION
+# --------------------------------------------------------------------------------
+
+# Crear script que ejecute todos los pasos en secuencia
+cat > pipeline_master.py << 'EOF'
+#!/usr/bin/env python3
+"""
+Script maestro para orquestar todo el pipeline ETL
+Ejecuta los 4 scripts en secuencia con manejo de errores
+"""
+
+import subprocess
+import logging
+import sys
+from datetime import datetime
+import time
+
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(f'/opt/etl-automation/logs/etl_pipeline_{datetime.now().strftime("%Y%m%d")}.log'),
+        logging.StreamHandler()
+    ]
+)
+
+# Configuración del pipeline
+PROJECT_ID = "tet-p3-2025"
+CLUSTER_NAME = "my-etl-cluster"
+REGION = "us-east1"
+BUCKET_SCRIPTS = "gs://etl-scripts-00/etl-pipeline"
+
+# Scripts en orden de ejecución
+PIPELINE_SCRIPTS = [
+    {
+        "name": "Extract SQL Data",
+        "script": f"{BUCKET_SCRIPTS}/extract_sql_data.py",
+        "timeout": 600,  # 10 minutos
+        "retries": 2
+    },
+    {
+        "name": "Ingest Weather Data", 
+        "script": f"{BUCKET_SCRIPTS}/ingest_weather_data.py",
+        "timeout": 1800,  # 30 minutos
+        "retries": 2
+    },
+    {
+        "name": "ETL Weather Locations",
+        "script": f"{BUCKET_SCRIPTS}/etl_weather_locations.py", 
+        "timeout": 1200,  # 20 minutos
+        "retries": 1
+    },
+    {
+        "name": "Load to BigQuery",
+        "script": f"{BUCKET_SCRIPTS}/load_to_bigquery.py",
+        "timeout": 900,   # 15 minutos
+        "retries": 2
+    }
+]
+
+def run_dataproc_job(script_path, job_name, timeout=600, retries=2):
+    """Ejecutar job en Dataproc con reintentos"""
+    
+    for attempt in range(retries + 1):
+        try:
+            logging.info(f"Ejecutando {job_name} (intento {attempt + 1}/{retries + 1})")
+            
+            cmd = [
+                "gcloud", "dataproc", "jobs", "submit", "pyspark",
+                script_path,
+                f"--cluster={CLUSTER_NAME}",
+                f"--region={REGION}",
+                f"--project={PROJECT_ID}"
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            
+            if result.returncode == 0:
+                logging.info(f"✅ {job_name} completado exitosamente")
+                logging.info(f"Output: {result.stdout}")
+                return True
+            else:
+                logging.error(f"❌ Error en {job_name}: {result.stderr}")
+                if attempt < retries:
+                    logging.info(f"Reintentando en 30 segundos...")
+                    time.sleep(30)
+                    
+        except subprocess.TimeoutExpired:
+            logging.error(f"⏰ Timeout en {job_name} después de {timeout} segundos")
+            if attempt < retries:
+                logging.info(f"Reintentando...")
+                time.sleep(30)
+        except Exception as e:
+            logging.error(f"💥 Error inesperado en {job_name}: {str(e)}")
+            if attempt < retries:
+                time.sleep(30)
+    
+    return False
+
+def run_full_pipeline():
+    """Ejecutar pipeline completo"""
+    
+    logging.info("🚀 Iniciando pipeline ETL completo")
+    start_time = datetime.now()
+    
+    # Verificar cluster activo
+    try:
+        cluster_check = subprocess.run([
+            "gcloud", "dataproc", "clusters", "describe", CLUSTER_NAME,
+            f"--region={REGION}", f"--project={PROJECT_ID}"
+        ], capture_output=True, text=True, timeout=30)
+        
+        if cluster_check.returncode != 0:
+            logging.error("❌ Cluster Dataproc no disponible")
+            return False
+            
+        logging.info("✅ Cluster Dataproc verificado")
+        
+    except Exception as e:
+        logging.error(f"❌ Error verificando cluster: {e}")
+        return False
+    
+    # Ejecutar scripts en secuencia
+    failed_jobs = []
+    
+    for i, job_config in enumerate(PIPELINE_SCRIPTS, 1):
+        logging.info(f"📋 Paso {i}/{len(PIPELINE_SCRIPTS)}: {job_config['name']}")
+        
+        success = run_dataproc_job(
+            job_config['script'],
+            job_config['name'], 
+            job_config['timeout'],
+            job_config['retries']
+        )
+        
+        if not success:
+            logging.error(f"❌ Fallo crítico en: {job_config['name']}")
+            failed_jobs.append(job_config['name'])
+            # Para algunos jobs, podemos continuar; para otros, debemos parar
+            if job_config['name'] in ["Extract SQL Data", "ETL Weather Locations"]:
+                logging.error("🛑 Job crítico falló, deteniendo pipeline")
+                break
+        
+        # Pausa entre jobs
+        if i < len(PIPELINE_SCRIPTS):
+            logging.info("⏳ Pausa de 60 segundos entre jobs...")
+            time.sleep(60)
+    
+    # Resumen final
+    end_time = datetime.now()
+    duration = end_time - start_time
+    
+    logging.info("=" * 60)
+    logging.info(f"📊 RESUMEN DEL PIPELINE")
+    logging.info(f"Inicio: {start_time}")
+    logging.info(f"Fin: {end_time}")
+    logging.info(f"Duración: {duration}")
+    
+    if failed_jobs:
+        logging.error(f"❌ Jobs fallidos: {', '.join(failed_jobs)}")
+        logging.info("🔄 Considera revisar logs y ejecutar manualmente")
+        return False
+    else:
+        logging.info("✅ Pipeline completado exitosamente")
+        return True
+
+if __name__ == "__main__":
+    success = run_full_pipeline()
+    sys.exit(0 if success else 1)
+EOF
+
+# Subir script maestro al bucket
+gsutil cp pipeline_master.py gs://etl-scripts-00/etl-pipeline/
+
+# --------------------------------------------------------------------------------
+# 3. CONFIGURAR VM PARA EJECUCION AUTOMATIZADA
+# --------------------------------------------------------------------------------
+
+# Conectarse a la VM
+gcloud compute ssh dataproc-trigger-vm --zone=us-east1-b --project=tet-p3-2025
+
+# Una vez dentro de la VM, ejecutar estos comandos:
+
+# Crear directorio de trabajo
+sudo mkdir -p /opt/etl-automation/{scripts,logs,config}
+sudo chown -R ubuntu:ubuntu /opt/etl-automation
+cd /opt/etl-automation
+
+# Instalar dependencias adicionales
+sudo apt update
+sudo apt install -y python3-pip mysql-client
+pip3 install mysql-connector-python pandas numpy requests google-cloud-bigquery 
+
+# Descargar script maestro desde bucket
+gsutil cp gs://etl-scripts-00/etl-pipeline/pipeline_master.py scripts/
+chmod +x scripts/pipeline_master.py
+
+# Crear script wrapper para cron
+sudo tee scripts/run_etl_pipeline.sh > /dev/null << 'EOF'
+#!/bin/bash
+
+# Script wrapper para ejecutar pipeline ETL desde cron
+# Configura variables de entorno y ejecuta el pipeline maestro
+
+# Variables de entorno
+export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/snap/bin
+export GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/.config/gcloud/application_default_credentials.json
+export PROJECT_ID=tet-p3-2025
+
+# Configuración de logging
+LOG_DIR="/opt/etl-automation/logs"juanandrs_montoyagaleano@dataproc-trigger-vm:/opt/etl-automation/scripts$ 
+LOG_FILE="${LOG_DIR}/pipeline_$(date +%Y%m%d_%H%M%S).log"
+
+# Crear directorio de logs si no existe
+mkdir -p "$LOG_DIR"
+
+# Función de logging
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
+}
+
+# Inicio del pipeline
+log "🚀 Iniciando pipeline ETL automatizado"
+
+# Verificar autenticación
+if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" | grep -q "@"; then
+    log "❌ Error: No hay autenticación activa de Google Cloud"
+    exit 1
+fi
+
+# Verificar proyecto
+CURRENT_PROJECT=$(gcloud config get-value project 2>/dev/null)
+if [ "$CURRENT_PROJECT" != "$PROJECT_ID" ]; then
+    log "⚠️ Configurando proyecto: $PROJECT_ID"
+    gcloud config set project "$PROJECT_ID"
+fi
+
+# Ejecutar pipeline maestro
+log "📋 Ejecutando pipeline maestro..."
+cd /opt/etl-automation
+
+python3 scripts/pipeline_master.py 2>&1 | tee -a "$LOG_FILE"
+PIPELINE_EXIT_CODE=$?
+
+# Verificar resultado
+if [ $PIPELINE_EXIT_CODE -eq 0 ]; then
+    log "✅ Pipeline completado exitosamente"
+    
+    # Limpiar logs antiguos (mantener últimos 30 días)
+    find "$LOG_DIR" -name "pipeline_*.log" -mtime +30 -delete 2>/dev/null
+    
+else
+    log "❌ Pipeline falló con código de salida: $PIPELINE_EXIT_CODE"
+    
+    # Enviar notificación de error (opcional)
+    # echo "Pipeline ETL falló en $(date)" | mail -s "ETL Pipeline Error" admin@company.com
+fi
+
+log "🏁 Finalizando ejecución"
+exit $PIPELINE_EXIT_CODE
+EOF
+
+chmod +x scripts/run_etl_pipeline.sh
+
+# --------------------------------------------------------------------------------
+# 4. CONFIGURAR CRONTAB PARA EJECUCION DIARIA
+# --------------------------------------------------------------------------------
+
+# Abrir crontab para edición
+crontab -e
+
+# AGREGAR ESTAS LINEAS AL CRONTAB:
+# -----------------------------------------------
+# Variables de entorno para cron
+PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/snap/bin
+GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/.config/gcloud/application_default_credentials.json
+
+# Pipeline ETL completo - Una vez por día a las 02:00
+0 2 * * * /opt/etl-automation/scripts/run_etl_pipeline.sh >> /opt/etl-automation/logs/cron.log 2>&1
+
+# Pipeline de respaldo - Domingos a las 04:00
+0 4 * * 0 /opt/etl-automation/scripts/run_etl_pipeline.sh >> /opt/etl-automation/logs/cron_backup.log 2>&1
+
+# Limpieza de logs - Primer día del mes a las 01:00
+0 1 1 * * find /opt/etl-automation/logs -name "*.log" -mtime +60 -delete
+# -----------------------------------------------
+
+# --------------------------------------------------------------------------------
+# 5. SCRIPTS DE MONITOREO Y CONTROL
+# --------------------------------------------------------------------------------
+
+# Script para ver status del pipeline
+cat > scripts/check_pipeline_status.sh << 'EOF'
+#!/bin/bash
+
+echo "=================================="
+echo "   ETL PIPELINE STATUS REPORT"
+echo "=================================="
+
+# Verificar crontab
+echo "📅 Trabajos programados:"
+crontab -l | grep -E "(run_etl_pipeline|#)"
+
+echo ""
+echo "📊 Últimas 5 ejecuciones:"
+ls -la /opt/etl-automation/logs/pipeline_*.log | tail -5
+
+echo ""
+echo "🔍 Log más reciente:"
+LATEST_LOG=$(ls -t /opt/etl-automation/logs/pipeline_*.log 2>/dev/null | head -1)
+if [ -n "$LATEST_LOG" ]; then
+    echo "Archivo: $LATEST_LOG"
+    echo "Tamaño: $(ls -lh "$LATEST_LOG" | awk '{print $5}')"
+    echo "Últimas líneas:"
+    tail -10 "$LATEST_LOG"
+else
+    echo "No se encontraron logs de pipeline"
+fi
+
+echo ""
+echo "☁️ Estado del cluster Dataproc
